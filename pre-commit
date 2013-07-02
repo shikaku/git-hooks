@@ -1,0 +1,25 @@
+#!/bin/bash
+
+EXIT=0
+
+# warn if `console.` is defined in js|tt|html|htm
+PATTERN='console.';
+FILES=$(git diff --cached --numstat -S$PATTERN | sed -e '/^0\b/d;/\.\(js\|tt\|html\|htm\)$/!d' | awk '{print " "$3}');
+if [ -n "$FILES" ]; then
+    echo "Pre-commit error: pattern '$PATTERN' is defined in files below"
+    echo "$FILES";
+    EXIT=1;
+fi
+
+# warn if `!!!` is defined in js|tt|html|htm
+PATTERN='!!!';
+FILES=$(git diff --cached --numstat -S$PATTERN | sed -e '/^0\b/d;/\.\(js\|tt\|html\|htm\)$/!d' | awk '{print " "$3}');
+if [ -n "$FILES" ]; then
+    echo "Pre-commit error: pattern '$PATTERN' is defined in files below"
+    echo "$FILES";
+    EXIT=1;
+fi
+
+if [ $EXIT = 1 ]; then
+    exit $EXIT;
+fi
