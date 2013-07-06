@@ -1,24 +1,34 @@
-#!/bin/sh
+#!/bin/bash
 
 EXIT=0
 
-# warn if `console.` is defined in js|tt|html|htm
-PATTERN='console.';
-FILES=$(git diff --cached --numstat -S$PATTERN | sed -e '/^0\b/d;/\.\(js\|tt\|html\|htm\)$/!d' | awk '{print " "$3}');
-if [ -n "$FILES" ]; then
-    echo "Pre-commit error: pattern '$PATTERN' is defined in files below"
-    echo "$FILES";
-    EXIT=1;
-fi
+function search_warning {
+    FILES=''
+    PATTERN=$1
+    while read name; do
+        git diff --cached $name | grep -E "^\+.*$PATTERN" &> /dev/null
+        if [ $? -eq 0 ]; then
+            FILES=$FILES${FILES:+"\n"}$name
+        fi
+    done <<< "`
+        if [ -z $2 ]; then
+            git diff --cached --name-only
+        else
+            git diff --cached --name-only | sed -e "/\.\($2\)$/!d"
+        fi
+    `"
+    if [ -n "$FILES" ]; then
+        echo "Pre-commit error: pattern '$PATTERN' is defined in files below"
+        echo -e $FILES;
+        EXIT=1;
+    fi
+}
 
-# warn if `!!!` is defined in js|tt|html|htm
-PATTERN='!!!';
-FILES=$(git diff --cached --numstat -S$PATTERN | sed -e '/^0\b/d;/\.\(js\|tt\|html\|htm\)$/!d' | awk '{print " "$3}');
-if [ -n "$FILES" ]; then
-    echo "Pre-commit error: pattern '$PATTERN' is defined in files below"
-    echo "$FILES";
-    EXIT=1;
-fi
+# warning if `console.` is defined in js|tt|html|htm
+search_warning 'console.' 'js\|tt\|html\|htm'
+
+# warning if `!!!` is defined in js|tt|html|htm
+search_warning '!!!' 'js\|tt\|html\|htm'
 
 if [ $EXIT = 1 ]; then
     exit $EXIT;
