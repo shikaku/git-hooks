@@ -25,7 +25,7 @@ function search_warning {
 }
 
 # warning if `console.` is defined in js|tt|html|htm
-search_warning 'console.' 'js\|tt\|html\|htm'
+search_warning 'console\.' 'js\|tt\|html\|htm'
 
 # warning if `!!!` is defined in js|tt|html|htm
 search_warning '!!!' 'js\|tt\|html\|htm'
