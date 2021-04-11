@@ -1,0 +1,261 @@
+#!/bin/bash
+
+echom() { echo "[commit-msg] $1"; }
+
+# Allows us to read user input below, assigns stdin to keyboard
+NON_INTERACTIVE="$(echom "test interactive mode..." > /dev/tty || echo true)"
+[[ -z "$NON_INTERACTIVE" ]] && exec < /dev/tty
+
+COMMIT_MSG_FILE=$1
+COMMIT_MSG="$(cat $1)"
+
+REGEX_DATE_PART='20(2[1-9]|[3-9][0-9])(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])'
+REGEX_JIRA_TICKET_PART='[A-Z]+-[0-9]{1,6}'
+REGEX_BRANCH_DESC_PART='[a-zA-Z][^[:space:]]*'
+REGEX_BRANCH_VER_PART='[1-9][0-9]?'
+
+REGEX_BRANCH_DESC_OPT='(_'$REGEX_BRANCH_DESC_PART')?'
+REGEX_BRANCH_VER_OPT='(\.'$REGEX_BRANCH_VER_PART')?'
+
+REGEX_JIRA_TICKET='^'$REGEX_JIRA_TICKET_PART'$'
+REGEX_DEVELOP_BRANCH='^(feature|bugfix|chore)/'$REGEX_JIRA_TICKET_PART''$REGEX_BRANCH_DESC_OPT'$'
+REGEX_RELEASE_BRANCH='^(release|hotfix)/'$REGEX_DATE_PART''$REGEX_BRANCH_VER_OPT''$REGEX_BRANCH_DESC_OPT'$'
+
+readm() {
+  local MESSAGE="$1"
+  local FALLBACK_MESSAGE="$2"
+  READM_OUTPUT=$3
+
+  if [[ -z "$NON_INTERACTIVE" ]]; then
+    read -p "$(echom "$MESSAGE")" $READM_OUTPUT
+  else
+    echom "$FALLBACK_MESSAGE"
+    exit 9
+  fi
+}
+
+trim_spaces() {
+  local STR="$1"
+  STR="${STR#"${STR%%[![:space:]]*}"}"   # remove leading whitespace characters
+  STR="${STR%"${STR##*[![:space:]]}"}"   # remove trailing whitespace characters
+  echo "$STR"
+}
+
+get_current_branch() {
+  git rev-parse --abbrev-ref HEAD
+}
+
+parse_branch() {
+  BRANCH_NAME="$1"
+  BRANCH_DESC="${1#*_}"
+  BRANCH_COMP=""
+  BRANCH_TICKET=""
+
+  if [[ "$BRANCH_DESC" == "$1" ]]; then
+    BRANCH_DESC=""
+  fi
+
+  if [[ -n "$BRANCH_DESC" ]]; then
+    BRANCH_NAME=${1/%_$BRANCH_DESC/}
+  fi
+
+  BRANCH_COMP="${BRANCH_NAME%%/*}"
+  if [[ "$BRANCH_COMP" == "$BRANCH_NAME" ]]; then
+    BRANCH_COMP=""
+  fi
+
+  BRANCH_TICKET="$BRANCH_NAME"
+  if [[ -n "$BRANCH_COMP" ]]; then
+    BRANCH_TICKET="${BRANCH_TICKET/#$BRANCH_COMP\//}"
+  fi
+  if [[ ! $BRANCH_TICKET =~ $REGEX_JIRA_TICKET ]]; then
+    BRANCH_TICKET=""
+  fi
+}
+
+parse_commit_msg() {
+  local FIRST_LINE="$(echo "$1" | head -1)"
+  local OTHER_LINES="$(echo "$1" | tail -n +2)"
+  local SHORT_MESSAGE=""
+  local MESSAGE=""
+  local TICKET=""
+
+  SHORT_MESSAGE="${FIRST_LINE#*]}"
+  SHORT_MESSAGE="$(trim_spaces "$SHORT_MESSAGE")"
+
+  MESSAGE="$(echo "$SHORT_MESSAGE"; echo "$OTHER_LINES")"
+
+  TICKET="${FIRST_LINE#*[}"
+  TICKET="${TICKET%%]*}"
+  [[ "$TICKET" == "$FIRST_LINE" ]] && TICKET=""
+  TICKET="$(trim_spaces "$TICKET")"
+
+  COMMIT_MSG_SHORT_MESSAGE="$SHORT_MESSAGE"
+  COMMIT_MSG_MESSAGE="$MESSAGE"
+  COMMIT_MSG_TICKET="$TICKET"
+}
+
+check_branch() {
+  local BRANCH="$1"
+
+  if [[ ! $BRANCH =~ $REGEX_DEVELOP_BRANCH ]] && [[ ! $BRANCH =~ $REGEX_RELEASE_BRANCH ]]; then
+    echom "Bad branch name!"
+    echom "It doesn't match: \"$REGEX_DEVELOP_BRANCH\""
+    echom "It doesn't match: \"$REGEX_RELEASE_BRANCH\""
+  fi
+}
+
+read_user_branch() {
+  READ_USER_BRANCH=""
+  local BRANCH_ERROR=""
+
+  while true; do
+    readm "Enter new branch name: " "Please fix branch name manually" READ_USER_BRANCH
+
+    BRANCH_ERROR="$(check_branch "$READ_USER_BRANCH")"
+
+    if [[ -z "$BRANCH_ERROR" ]]; then
+      break
+    else
+      echo "$BRANCH_ERROR"
+    fi
+  done
+}
+
+read_jira_ticket() {
+  READ_JIRA_TICKET=""
+  local ERROR_MSG="$1"
+
+  if [ -z "$ERROR_MSG" ]; then
+    echom "JIRA ticket not found in commit message"
+  else
+    echom "$ERROR_MSG"
+  fi
+
+  while true; do
+    readm "Please enter new Jira ticket: " "Please fix Jira ticket manually" READ_JIRA_TICKET
+    if [[ "$READ_JIRA_TICKET" =~ $REGEX_JIRA_TICKET ]]; then
+      break
+    else
+      echom "Bad JIRA ticket!"
+      echom "It doesn't match \"$REGEX_JIRA_TICKET\""
+    fi
+  done
+}
+
+read_commit_msg() {
+  READ_COMMIT_MSG=""
+
+  while true; do
+    readm "Please enter commit message: " "Please fix commit message manually" READ_COMMIT_MSG
+    parse_commit_msg "$READ_COMMIT_MSG"
+    if [[ -n "$COMMIT_MSG_SHORT_MESSAGE" ]]; then
+      break
+    else
+      echom "Short commit message is required!"
+    fi
+  done
+}
+
+format_commit_msg() {
+  local JIRA_TICKET="$1"
+  local MESSAGE="$2"
+
+  JIRA_TICKET="$(trim_spaces "$JIRA_TICKET")"
+  MESSAGE="$(trim_spaces "$MESSAGE")"
+
+  echo "[$JIRA_TICKET] $MESSAGE"
+}
+
+fix_commit_msg() {
+  local MESSAGE="$1"
+  local JIRA_TICKET="$2"
+
+  if [ -z "$JIRA_TICKET" ]; then
+    parse_branch "$(get_current_branch)"
+    JIRA_TICKET="$BRANCH_TICKET"
+  fi
+
+  format_commit_msg "$JIRA_TICKET" "$MESSAGE" > $COMMIT_MSG_FILE
+}
+
+check_current_branch() {
+  local BRANCH="$(get_current_branch)"
+  local BRANCH_ERROR="$(check_branch "$BRANCH")"
+  local yn
+
+  if [[ -n "$BRANCH_ERROR" ]]; then
+    echo "$BRANCH_ERROR"
+
+    while true; do
+      readm "Do you want to rename branch? (Y/n) " "Please rename branch manually" yn
+      if [ "$yn" = "" ]; then
+        yn='Y'
+      fi
+      case $yn in
+          [Yy] ) read_user_branch; break;;
+          [Nn] ) echom "Please rename branch manually"; exit 1;;
+          * ) echom "Please answer y or n for yes or no.";;
+      esac
+    done
+
+    git branch -m $BRANCH $READ_USER_BRANCH
+  fi
+}
+
+check_current_commit() {
+  local BRANCH="$(get_current_branch)"
+  local yn
+
+  parse_branch "$BRANCH"
+  parse_commit_msg "$COMMIT_MSG"
+
+  if [[ -z "$COMMIT_MSG_SHORT_MESSAGE" ]]; then
+    local SAVED_COMMIT_MSG_TICKET="$COMMIT_MSG_TICKET"
+    echom "Short commit message is required!"
+    read_commit_msg
+    parse_commit_msg "$READ_COMMIT_MSG"
+    if [[ -z "$COMMIT_MSG_TICKET" ]]; then
+      COMMIT_MSG_TICKET="$SAVED_COMMIT_MSG_TICKET"
+    fi
+  fi
+
+  if [[ "$BRANCH" =~ $REGEX_DEVELOP_BRANCH ]]; then
+    if [[ -n "$COMMIT_MSG_TICKET" && "$COMMIT_MSG_TICKET" != "$BRANCH_TICKET" ]]; then
+      while true; do
+        echom "Commit Jira ticket ($COMMIT_MSG_TICKET) doesn't match branch ticket ($BRANCH_TICKET)"
+        readm "Fix it? (Y/n) " "Please fix Jira ticket manually" yn
+        if [ "$yn" = "" ]; then
+          yn='Y'
+        fi
+        case $yn in
+            [Yy] ) break;;
+            [Nn] ) echom "Commit cancelled"; exit 2;;
+            * ) echom "Please answer y or n for yes or no.";;
+        esac
+      done
+    fi
+    fix_commit_msg "$COMMIT_MSG_MESSAGE" "$BRANCH_TICKET"
+
+  elif [[ "$BRANCH" =~ $REGEX_RELEASE_BRANCH ]]; then
+    if [[ -z "$COMMIT_MSG_TICKET" ]]; then
+      read_jira_ticket
+      fix_commit_msg "$COMMIT_MSG_MESSAGE" "$READ_JIRA_TICKET"
+    else
+      if [[ ! "$COMMIT_MSG_TICKET" =~ $REGEX_JIRA_TICKET ]]; then
+        read_jira_ticket "JIRA ticket is incorrect"
+        fix_commit_msg "$COMMIT_MSG_MESSAGE" "$READ_JIRA_TICKET"
+      else
+        fix_commit_msg "$COMMIT_MSG_MESSAGE" "$COMMIT_MSG_TICKET"
+      fi
+    fi
+
+  else
+    echom "Something went wrong"
+    exit 3
+  fi
+}
+
+# RUN checks
+check_current_branch
+check_current_commit
